@@ -1,8 +1,8 @@
 from scrapy import cmdline
 
-#cmdline.execute('scrapy crawl FBPostSpider'.split())
+cmdline.execute('scrapy crawl FBPostSpider'.split())
 #cmdline.execute('scrapy crawl FBInitSpider'.split())
-cmdline.execute('scrapy crawl FBUsersSpider'.split())
+#cmdline.execute('scrapy crawl FBUsersSpider'.split())
 
 # import re
 # import codecs
@@ -93,4 +93,3 @@ cmdline.execute('scrapy crawl FBUsersSpider'.split())
 #     api = "https://graph.facebook.com/v2.12/100000485762440/friendlists?access_token=EAAGSdoBKSIgBALgSzNwDKda7k1ZC2HJAQskUxuxjwHlx1WFQw6XyZCHZAGKuybD8HOdPwu5wQ4lGtFFYNvIXnHIHc4ZAxSORuHL2SJxfPlJQoOQPTeAgb4F0m85Eqa7UmpOxUoXVDSAhfUWcYPMSRh7cUcO6AnzQGtnHuoaCm9bdgWC5HR1jAeUdTAPy2TfGzoZBIjgUSZBANZAtDPzwjlo"
 #     response = requests.get(api, proxies = proxies, headers = header)
 #     print(response.json())
-

@@ -6,4 +6,4 @@ FBSpider/users.txt
 FBSpider/**/__pycache__/
 FBSpider/**/__init__.py
 FBSpider/FBSpider/FBSpider.config
-
+FBSpider/FBSpider/spiders/FBUserSpider

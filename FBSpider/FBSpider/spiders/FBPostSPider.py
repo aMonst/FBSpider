@@ -3,7 +3,7 @@ from FBSpider.items import *
 from urllib.parse import urljoin, urlparse
 from scrapy.http.request import Request
 from scrapy_splash import SplashRequest, SplashFormRequest
-
+import codecs
 from FBSpider.LuaScript import *
 from FBSpider.settings import *
 from FBSpider.ReadConfig import ReadConfig
@@ -14,6 +14,12 @@ from FBSpider.dbHelper import *
 import random
 import queue
 import re
+
+class TaskInfo(object):
+    user_id = ""
+    user_name = ""
+    user_level = ""
+    user_type = ""
 
 class FBPostSpider(scrapy.Spider):
     name = 'FBPostSpider'
@@ -36,17 +42,23 @@ class FBPostSpider(scrapy.Spider):
 
         self.tasks = queue.Queue()
         self.cookie = []
+        self.start_users = []
+        self.getUsers() # 从文件中导入的用户信息
         self.deal = set() #保存已处理的用户信息
+        self.config = ReadConfig()
+        self.Inited = False   #是否完成初始化
+
+    def isInitSuccess(self): #是否完成了初始化
+        return self.Inited
 
     def login(self, response):
-        config = ReadConfig()
-        users = config.getLoginUsers()
+        users = self.config.getLoginUsers()
         if not users:
             print("请在配置文件中至少指定一个登陆用户信息")
             return
 
-        if config.hasKey("proxy"):
-            proto, host, port = config.getRnadomProxy()
+        if self.config.hasKey("proxy"):
+            proto, host, port = self.config.getRnadomProxy()
             user_proxy = USE_PROXY % (host, port, proto)
         else:
             user_proxy = ""
@@ -76,65 +88,82 @@ class FBPostSpider(scrapy.Spider):
         #登录成功的话页面会跳转到主页
         if response.data["url"] == self.login_url:
             print("登录失败，即将关闭爬虫.....")
+            self.Inited = True
             return
 
-        self.cookie.append(response.data["cookies"]) # 保存cookie
+        self.cookie.append(response.data["cookies"])  # 保存cookie
+
+    def get_start_request(self):
         # 登录成功后请求用户主页，爬取用户主页信息
-        dbOpr = dbInit()
-        users = dbOpr.query(TopUser.user_id, TopUser.user_type, TopUser.user_level).all()
-        for user in users:
-            self.tasks.put(user)
+        requests = []
+        if self.cookie == []:
+            return requests
+
+        for user in self.start_users:
+            url = urljoin("https://www.facebook.com/", user)
+            if self.config.hasKey("proxy"):
+                proto, host, port = self.config.getRnadomProxy()
+                user_proxy = USE_PROXY % (host, port, proto)
+            else:
+                user_proxy = ""
+
+            lua_script = REQUEST_MAIN_PAGE % user_proxy
+
+            request = SplashRequest(
+                url=url,
+                endpoint="execute",
+                callback=self._get_user_page,
+                meta={
+                    "level": 1,
+                    "user_name" : user
+                },
+
+                cookies=random.choice(self.cookie),
+                args={
+                    "wait": 30,
+                    "lua_source": lua_script,
+                }
+            )
+
+            requests.append(request)
+
+        self.start_users = [] # 第一次提交任务成功后不再提交，防止重复爬取
+
+        return requests
 
     def make_requests_from_job(self):
+        requests = []
         if not self.tasks.empty():
-            user = self.tasks.get()
-            if user[0] in self.deal:
+            task = self.tasks.get()
+            if task.user_name in self.deal:
                 return
 
-            self.deal.add(user[0])
-            print("准备提取用户[%s]的相关信息" % user[0])
-            user_id = user[0]
-            user_type = user[1]
-            if user_type == TopUser.PUBLIC_PAGE:
-                 # 公共主页通过API获取
-                 access_token_url = "https://developers.facebook.com/tools/explorer/"
+            self.deal.add(task.user_name)
+            if task.user_level == 4:
+                return
 
-                 return Request(
-                     url=access_token_url,
-                     meta={
-                         'cookiejar': 1,
-                         "user": user_id,
-                         "level" : user[2]
-                     },
+            if task.user_type == TopUser.PUBLIC_PAGE:
+                print("公共主页没有好友信息")
+                # 公共主页通过API获取发帖信息
+                access_token_url = "https://developers.facebook.com/tools/explorer/"
 
-                     callback=self.get_access_token,
-                     errback=self.error_parse
-                 )
-
-            elif user_type == TopUser.PRIVATE_PAGE:
-                api = urljoin("https://www.facebook.com", user_id)
-                config = ReadConfig()
-                if config.hasKey("proxy"):
-                    proto, host, port = config.getRnadomProxy()
+                if self.config.hasKey("proxy"):
+                    proto, host, port = self.config.getRnadomProxy()
                     user_proxy = USE_PROXY % (host, port, proto)
                 else:
                     user_proxy = ""
 
-                if config.hasKey("flush_times"):
-                    flush_times = config.getValue("flush_times")
-                else:
-                    flush_times = 0
+                lua_script = REQUEST_MAIN_PAGE % user_proxy
 
-                lua_script = REQUEST_COMPLETE_PAGE % (user_proxy, int(flush_times))
-                return SplashRequest(
-                    cookies= random.choice(self.cookie),
-                    url=api,
-                    callback=self._get_private_posts,
-                    errback=self._get_posts_error,
+                request = SplashRequest(
+                    url = access_token_url,
                     endpoint="execute",
+                    callback=self.get_access_token,
+
+                    cookies=random.choice(self.cookie),
                     meta={
-                        "user": user_id,
-                        "level": user[2]
+                        "user": task.user_id,
+                        "level": task.user_level
                     },
 
                     args={
@@ -143,11 +172,75 @@ class FBPostSpider(scrapy.Spider):
                     }
                 )
 
+                requests.append(request)
+
+
+            elif task.user_type == TopUser.PRIVATE_PAGE:
+                api = urljoin("https://www.facebook.com", task.user_id)
+                if self.config.hasKey("proxy"):
+                    proto, host, port = self.config.getRnadomProxy()
+                    user_proxy = USE_PROXY % (host, port, proto)
+                else:
+                    user_proxy = ""
+
+                lua_script = GET_FRIEND_PAGE % user_proxy
+                request = SplashRequest(
+                    url=api,
+                    cookies=random.choice(self.cookie),
+                    endpoint="execute",
+                    callback=self._get_friends_page,
+                    meta={
+                        "level": task.user_level,
+                        "name": task.user_name
+                    },
+
+                    args={
+                        "lua_source": lua_script,
+                        "wait": 30,
+                    }
+                )
+
+                requests.append(request)
+
+                api = urljoin("https://www.facebook.com", task.user_id)
+                if self.config.hasKey("proxy"):
+                    proto, host, port = self.config.getRnadomProxy()
+                    user_proxy = USE_PROXY % (host, port, proto)
+                else:
+                    user_proxy = ""
+
+                if self.config.hasKey("flush_times"):
+                    flush_times = self.config.getValue("flush_times")
+                else:
+                    flush_times = 0
+
+                lua_script = REQUEST_COMPLETE_PAGE % (user_proxy, int(flush_times))
+                request= SplashRequest(
+                    cookies= random.choice(self.cookie),
+                    url=api,
+                    callback=self._get_private_posts,
+                    errback=self._get_posts_error,
+                    endpoint="execute",
+                    meta={
+                        "user": task.user_id,
+                        "level": task.user_level
+                    },
+
+                    args={
+                        "wait": 30,
+                        "lua_source": lua_script,
+                    }
+                )
+
+                requests.append(request)
+
+        return requests
+
     def get_access_token(self, response):
         sel = Selector(response=response)
         access_token = sel.xpath('//label[@class="_2toh _36wp _55r1 _58ak"]/input[@class="_58al"]//@value').extract_first()
 
-        api = urljoin("https://graph.facebook.com/v3.0", response.meta["user_id"])
+        api = urljoin("https://graph.facebook.com/v3.0", response.meta["user"])
         api = api + "/posts" + "?access_token=" + access_token + "&fields=link,id,message,full_picture,parent_id,created_time,comments"
 
         yield Request(
@@ -162,7 +255,7 @@ class FBPostSpider(scrapy.Spider):
         )
 
     def error_parse(self, response):
-        print("发生网络错误，即将停止对用户[%s]信息的爬取" % response.meta["user"])
+        print("发生网络错误，即将停止相应的任务")
         print("-------------------------详情------------------------------------")
         print(repr(response))
 
@@ -201,15 +294,14 @@ class FBPostSpider(scrapy.Spider):
                     comment_msg = comment["message"]
 
                     url = urljoin("https://www.facebook.com", comment_id)
-                    config = ReadConfig()
-                    if config.hasKey("proxy"):
-                        proto, host, port = config.getRnadomProxy()
+                    if self.config.hasKey("proxy"):
+                        proto, host, port = self.config.getRnadomProxy()
                         user_proxy = USE_PROXY % (host, port, proto)
                     else:
                         user_proxy = ""
 
                     lua_script = REQUEST_MAIN_PAGE % (user_proxy)
-                    return SplashRequest(
+                    yield SplashRequest(
                         cookies=random.choice(self.cookie),
                         url = url,
                         callback=self._get_comment_user,
@@ -247,9 +339,8 @@ class FBPostSpider(scrapy.Spider):
         sel = Selector(response = response)
         posts = sel.xpath("//div[@class = '_5pcr userContentWrapper']")
 
-        config = ReadConfig()
-        if config.hasKey("proxy"):
-            proto, host, port = config.getRnadomProxy()
+        if self.config.hasKey("proxy"):
+            proto, host, port = self.config.getRnadomProxy()
             user_proxy = USE_PROXY % (host, port, proto)
         else:
             user_proxy = ""
@@ -316,6 +407,7 @@ class FBPostSpider(scrapy.Spider):
                         "post_id": item["post_id"],
                         "user_name": user_name
                     },
+
                     args={
                         "wait": 30,
                         "lua_source": lua_script,
@@ -328,9 +420,8 @@ class FBPostSpider(scrapy.Spider):
         user_name = a_tag.xpath(".//text()").extract_first()
         user_page = a_tag.xpath(".//@href").extract_first()
 
-        config = ReadConfig()
-        if config.hasKey("proxy"):
-            proto, host, port = config.getRnadomProxy()
+        if self.config.hasKey("proxy"):
+            proto, host, port = self.config.getRnadomProxy()
             user_proxy = USE_PROXY % (host, port, proto)
         else:
             user_proxy = ""
@@ -353,32 +444,7 @@ class FBPostSpider(scrapy.Spider):
             }
         )
 
-    def _get_user_page(self, response):
-        # 提取主页中的用户信息
-        user_item = self._get_user_info(response.data["html"], response.url)
-        if user_item["user_type"] == 0:
-            print("未找到对应用户信息，可能是程序所使用的登录账号被封禁")
-            return
-
-        user_item["user_level"] = response.meta["level"]
-        user_item["user_name"] = response.meta["user_name"]
-
-        print("提取到用户信息[%s]" % user_item["user_name"])
-        yield user_item
-
-        comment_item = UserComment()
-        comment_item["user_id"] = user_item["user_id"]
-        comment_item["user_name"] = response.meta["user_name"]
-        comment_item["post_id"] = response.meta["post_id"]
-        comment_item["comment"] = response.meta["message"]
-        yield comment_item
-
-        if user_item["user_level"] == 4:  # 最多取3层用户，当前用户为第四层时就不再取（由于外部导入的算第一层所以这里取到第4层）
-            return
-
-        self.tasks.put((user_item["user_id"], user_item["user_type"], user_item["user_level"]))
-
-# 获取用户信息
+    # 获取用户信息
     def _get_user_info(self, html, url):
         key = "page_id=(\d+)"
         # page_id 只会出现在公共主页上，所以根据page_id来判断页面类型
@@ -414,3 +480,117 @@ class FBPostSpider(scrapy.Spider):
             return user_item
 
         return user_item
+
+    def getUsers(self):
+        f = codecs.open(self.path, "r", encoding="utf-8")
+        users = f.readlines()
+
+        for user in users:
+            user = user.strip("\r\n")
+            self.start_users.append(user)
+
+    def _get_friends_page(self, response):
+        hasFriend = response.data["hasFriend"]
+        if not hasFriend:
+            print("用户[%s]未开放好友查询权限" % response.meta["name"])
+            return
+
+        sel = Selector(response = response)
+        friends = sel.xpath("//a[@name='全部好友']")
+        if friends == []:
+            print("用户[%s]未开放好友查询权限" % response.meta["name"])
+            return
+
+        if self.config.hasKey("proxy"):
+            proto, host, port = self.config.getRnadomProxy()
+            user_proxy = USE_PROXY % (host, port, proto)
+        else:
+            user_proxy = ""
+
+        if self.config.hasKey("flush_times"):
+            flush_times = self.config.getValue("flush_times")
+        else:
+            flush_times = 0
+
+        lua_script = FLUSH_FRIEND_PAGE % (user_proxy, int(flush_times))
+
+        yield SplashRequest(
+            url = response.data["url"],
+            callback= self.parse_friends,
+            endpoint="execute",
+            cookies= random.choice(self.cookie),
+            meta= {"level" : response.meta["level"], "name" : response.meta["name"]},
+            args={
+                "wait" : 30,
+                "lua_source" : lua_script,
+            }
+        )
+
+    def parse_friends(self, response):
+        sel = Selector(response = response)
+        friends = sel.xpath("//li[@class='_698']//div[@class='fsl fwb fcb']//a")
+
+        if self.config.hasKey("proxy"):
+            proto, host, port = self.config.getRnadomProxy()
+            user_proxy = USE_PROXY % (host, port, proto)
+        else:
+            user_proxy = ""
+
+        lua_script = REQUEST_MAIN_PAGE % user_proxy
+
+        for friend in friends:
+            url = friend.xpath(".//@href").extract_first()
+            name = friend.xpath(".//text()").extract_first()
+
+            level = response.meta["level"] + 1
+
+            #记录当前好友关系
+            friend_item = FBUserItem()
+            friend_item["user_name"] = response.meta["name"]
+            friend_item["friend_name"] = name
+
+            print("提取到好友信息%s : %s" % (friend_item["user_name"], friend_item["friend_name"]))
+            yield friend_item
+
+            yield SplashRequest(
+                url = url,
+                endpoint="execute",
+                callback= self._get_user_page,
+                meta={"name" : name, "level" : level},
+                cookies = random.choice(self.cookie),
+                args={
+                    "wait": 30,
+                    "lua_source": lua_script,
+                }
+            )
+
+    def _get_user_page(self, response):
+        # 提取主页中的用户信息
+        user_item = self._get_user_info(response.data["html"], response.url)
+        if user_item["user_type"] == 0:
+            print("未找到对应用户信息，可能是程序所使用的登录账号被封禁")
+            self.Inited = True
+            return
+
+        user_item["user_level"] = response.meta["level"]
+        user_item["user_name"] = response.meta["user_name"]
+
+        print("提取到用户信息[%s]" % user_item["user_name"])
+
+        task_info = TaskInfo()
+        task_info.user_name = user_item["user_name"]
+        task_info.user_level = user_item["user_level"]
+        task_info.user_id = user_item["user_id"]
+        task_info.user_type = user_item["user_type"]
+        self.tasks.put(task_info)
+        self.Inited = True
+
+        yield user_item
+
+        if "message" in response.meta:
+            comment_item = UserComment()
+            comment_item["user_id"] = user_item["user_id"]
+            comment_item["user_name"] = response.meta["user_name"]
+            comment_item["post_id"] = response.meta["post_id"]
+            comment_item["comment"] = response.meta["message"]
+            yield comment_item

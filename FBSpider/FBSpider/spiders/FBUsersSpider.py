@@ -34,22 +34,11 @@ class FBUsersSpider(scrapy.Spider):
             "Referer": "https://www.facebook.com/",
         }
 
-        self.start_users = self.getUsers()
+
         self.cookie = []
         self.config = ReadConfig()
         self.deal = set()
         super(FBUsersSpider, self).__init__(*args, **kwargs)
-
-    def getUsers(self):
-        f = codecs.open(self.path, "r", encoding="utf-8")
-        users = f.readlines()
-        urls = []
-
-        for user in users:
-            user = user.strip("\r\n")
-            url = urljoin("https://www.facebook.com", user)
-            urls.append((user , url))
-        return urls
 
     def login(self, response):
         if self.config.hasKey("proxy"):
@@ -212,82 +201,6 @@ class FBUsersSpider(scrapy.Spider):
             return user_item
 
         return user_item
-
-    def _get_friends_page(self, response):
-        hasFriend = response.data["hasFriend"]
-        if not hasFriend:
-            print("用户[%s]未开放好友查询权限" % response.meta["name"])
-            return
-
-        html = response.data["html"]
-        sel = Selector(response = response)
-        friends = sel.xpath("//a[@name='全部好友']")
-        if friends == []:
-            print("用户[%s]未开放好友查询权限" % response.meta["name"])
-            return
-
-        if self.config.hasKey("proxy"):
-            proto, host, port = self.config.getRnadomProxy()
-            user_proxy = USE_PROXY % (host, port, proto)
-        else:
-            user_proxy = ""
-
-        if self.config.hasKey("flush_times"):
-            flush_times = self.config.getValue("flush_times")
-        else:
-            flush_times = 0
-
-        lua_script = FLUSH_FRIEND_PAGE % (user_proxy, int(flush_times))
-
-        yield SplashRequest(
-            url = response.data["url"],
-            callback= self.parse_friends,
-            endpoint="execute",
-            cookies= random.choice(self.cookie),
-            meta= {"level" : response.meta["level"], "name" : response.meta["name"]},
-            args={
-                "wait" : 30,
-                "lua_source" : lua_script,
-            }
-        )
-
-    def parse_friends(self, response):
-        sel = Selector(response = response)
-        friends = sel.xpath("//li[@class='_698']//div[@class='fsl fwb fcb']//a")
-
-        if self.config.hasKey("proxy"):
-            proto, host, port = self.config.getRnadomProxy()
-            user_proxy = USE_PROXY % (host, port, proto)
-        else:
-            user_proxy = ""
-
-        lua_script = REQUEST_MAIN_PAGE % user_proxy
-
-        for friend in friends:
-            url = friend.xpath(".//@href").extract_first()
-            name = friend.xpath(".//text()").extract_first()
-
-            level = response.meta["level"] + 1
-
-            #记录当前好友关系
-            friend_item = FBUserItem()
-            friend_item["user_name"] = response.meta["name"]
-            friend_item["friend_name"] = name
-
-            print("提取到好友信息%s : %s" % (friend_item["user_name"], friend_item["friend_name"]))
-            yield friend_item
-
-            yield SplashRequest(
-                url = url,
-                endpoint="execute",
-                callback= self.parse_main_page,
-                meta={"name" : name, "level" : level},
-                cookies = random.choice(self.cookie),
-                args={
-                    "wait": 30,
-                    "lua_source": lua_script,
-                }
-            )
 
     def _isUserExit(self, user_name):
         dbOpr = dbInit()

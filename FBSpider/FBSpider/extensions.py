@@ -1,5 +1,6 @@
 from scrapy import signals
-from .spiders.FBPostSPider import FBPostSpider
+from .spiders.FBPostSPider import *
+import time
 
 class HookSpiderIDLEExterns(object):
     @classmethod
@@ -13,6 +14,11 @@ class HookSpiderIDLEExterns(object):
 
     def spider_idle(self, spider):
         if spider.name == "FBPostSpider":
-            request = spider.make_requests_from_job()
-            if request != None:
-                self.crawler.engine.crawl(request, spider)
+            if spider.isInitSuccess():
+                requests = spider.make_requests_from_job()
+            else:
+                requests = spider.get_start_request()
+
+            if requests != None:
+                for request in requests:
+                    self.crawler.engine.crawl(request, spider)

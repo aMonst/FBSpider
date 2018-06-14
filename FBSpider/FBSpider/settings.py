@@ -37,7 +37,7 @@ DOWNLOAD_DELAY = 5
 # Disable cookies (enabled by default)
 COOKIES_ENABLED = False
 COOKIES_DEBUG = False
-LOG_FILE = "FBSpider.log"
+#LOG_FILE = "FBSpider.log"
 
 # Disable Telnet Console (enabled by default)
 #TELNETCONSOLE_ENABLED = False
