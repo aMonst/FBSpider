@@ -556,7 +556,7 @@ class FBPostSpider(scrapy.Spider):
                 url = url,
                 endpoint="execute",
                 callback= self._get_user_page,
-                meta={"name" : name, "level" : level},
+                meta={"user_name" : name, "level" : level},
                 cookies = random.choice(self.cookie),
                 args={
                     "wait": 30,

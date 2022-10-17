@@ -20,7 +20,7 @@ NEWSPIDER_MODULE = 'FBSpider.spiders'
 USER_AGENT = 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.1 (KHTML, like Gecko) Chrome/22.0.1207.1 Safari/537.1'
 # Obey robots.txt rules
 ROBOTSTXT_OBEY = False
-SPLASH_URL = "http://192.168.99.100:8050"
+SPLASH_URL = "http://127.0.0.1:8050"
 DUPEFILTER_CLASS = 'scrapy_splash.SplashAwareDupeFilter'
 HTTPCACHE_STORAGE = 'scrapy_splash.SplashAwareFSCacheStorage'
 # Configure maximum concurrent requests performed by Scrapy (default: 16)
